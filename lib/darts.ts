@@ -1,4 +1,12 @@
 export const SECTORS = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+export type GameSettings = { rounds: number; darts: number };
+export function gameProgress(count: number, settings: GameSettings) {
+  const limit = settings.rounds * settings.darts;
+  const finished = count >= limit;
+  const round = Math.min(settings.rounds, Math.floor(count / settings.darts) + 1);
+  return { limit, finished, round, start: (round - 1) * settings.darts };
+}
+export function bestKey(settings: GameSettings) { return `air-darts-best-v1-${settings.rounds}-${settings.darts}`; }
 export function scoreAt(x: number, y: number) {
   const r = Math.hypot(x,y);
   if (!Number.isFinite(r) || r > 1) return { score: 0, label: 'MISS' };

@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreAt, Gesture, SECTORS } from '../lib/darts.ts';
+import { scoreAt, Gesture, SECTORS, gameProgress, bestKey } from '../lib/darts.ts';
+test('all selectable settings finish exactly on the chosen throw and retain final round', () => {
+  for (let rounds=1; rounds<=12; rounds++) for (let darts=1; darts<=6; darts++) {
+    const settings={ rounds,darts }, limit=rounds*darts;
+    assert.deepEqual(gameProgress(0,settings),{limit,finished:false,round:1,start:0});
+    assert.equal(gameProgress(limit-1,settings).finished,false);
+    assert.deepEqual(gameProgress(limit,settings),{limit,finished:true,round:rounds,start:(rounds-1)*darts});
+    if (rounds>1) assert.equal(gameProgress(darts,settings).start,darts);
+  }
+});
+test('best records stay separate even when total throw counts match', () => {
+  assert.notEqual(bestKey({rounds:8,darts:3}),bestKey({rounds:12,darts:2}));
+});
 test('bull, outer bull, miss and every sector multiplier', () => {
   assert.equal(scoreAt(0,0).score,50); assert.equal(scoreAt(.07,0).score,25);
   assert.equal(scoreAt(1.1,0).score,0); assert.equal(scoreAt(NaN,0).score,0);

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { Camera, MousePointer2, RotateCcw, Crosshair, Volume2, VolumeX } from 'lucide-react';
-import { scoreAt, Gesture, SECTORS } from '../lib/darts';
+import { scoreAt, Gesture, SECTORS, gameProgress, bestKey, type GameSettings } from '../lib/darts';
 type Point = { x: number; y: number };
 type Hit = Point & { score: number; label: string };
 type Detector = { detectForVideo: (v: HTMLVideoElement, t: number) => { landmarks: Point[][] }; close: () => void };
@@ -13,21 +13,47 @@ export default function Home() {
   const hitsRef = useRef<Hit[]>([]), cooldown = useRef(0), enabled = useRef(false), generation = useRef(0);
   const soundRef = useRef(true), audio = useRef<AudioContext | null>(null);
   const [hits, setHits] = useState<Hit[]>([]);
+  const [settings, setSettings] = useState<GameSettings>({ rounds: 8, darts: 3 });
+  const settingsRef = useRef(settings);
+  const [draft, setDraft] = useState(settings);
+  const [best, setBest] = useState<number | null>(null);
+  const [newBest, setNewBest] = useState(false);
+  const [storageWarning, setStorageWarning] = useState(false);
   const [cameraState, setCameraState] = useState<'off' | 'loading' | 'on'>('off');
   const [status, setStatus] = useState('カメラを開始、または盤をクリックしてプレイ');
   const [sound, setSound] = useState(true), [result, setResult] = useState('狙いを定めよう');
-  const total = hits.reduce((sum, h) => sum + h.score, 0), finished = hits.length === 24;
-  const round = Math.min(8, Math.floor(hits.length / 3) + 1);
-  const current = hits.slice(finished ? 21 : Math.floor(hits.length / 3) * 3);
+  const total = hits.reduce((sum, h) => sum + h.score, 0);
+  const { finished, round, start, limit } = gameProgress(hits.length, settings);
+  const current = hits.slice(start);
+  const average = hits.length ? (total / hits.length).toFixed(1) : '—';
+  const bulls = hits.filter(h => h.label === 'BULL' || h.label === 'OUTER BULL').length;
+  function loadBest(config: GameSettings) {
+    try {
+      const value = localStorage.getItem(bestKey(config));
+      const parsed = value === null ? null : Number(value);
+      return parsed !== null && Number.isInteger(parsed) && parsed >= 0 && parsed <= config.rounds * config.darts * 60 ? parsed : null;
+    } catch { setStorageWarning(true); return null; }
+  }
+  useEffect(() => { setBest(loadBest(settings)); }, [settings]);
   function unlockAudio() {
     try { audio.current ??= new AudioContext(); void audio.current.resume().catch(() => {}); } catch { /* Sound is optional. */ }
   }
   function throwDart(point: Point) {
     const now = performance.now();
-    if (now < cooldown.current || hitsRef.current.length >= 24) return;
+    if (now < cooldown.current || gameProgress(hitsRef.current.length, settingsRef.current).finished) return;
     cooldown.current = now + 850;
     const scored = scoreAt(point.x, point.y), next = [...hitsRef.current, { ...point, ...scored }];
     hitsRef.current = next; setHits(next);
+    if (gameProgress(next.length, settingsRef.current).finished) {
+      const score = next.reduce((sum, h) => sum + h.score, 0);
+      const previousBest = loadBest(settingsRef.current);
+      const record = previousBest === null || score > previousBest;
+      setNewBest(record); setBest(Math.max(previousBest ?? 0, score));
+      if (record) {
+        try { localStorage.setItem(bestKey(settingsRef.current), String(score)); }
+        catch { setStorageWarning(true); }
+      }
+    }
     setResult(scored.label === 'MISS' ? 'MISS — 次を狙おう' : `${scored.label}  +${scored.score}`);
     if (soundRef.current && audio.current?.state === 'running') {
       const ctx = audio.current, osc = ctx.createOscillator(), gain = ctx.createGain();
@@ -77,6 +103,10 @@ export default function Home() {
   function reset() {
     hitsRef.current = []; setHits([]); cooldown.current = performance.now() + 500;
     gesture.current.reset(); held.current = false; setResult('狙いを定めよう');
+    setNewBest(false);
+  }
+  function applySettings() {
+    settingsRef.current = { ...draft }; setSettings({ ...draft }); reset();
   }
   useEffect(() => {
     let frame = 0, lastVideo = -1, lastDetect = 0;
@@ -102,7 +132,7 @@ export default function Home() {
         } catch { stopCamera(); setStatus('手の認識が停止しました。カメラを再開してください。'); }
       }
       const ctx = canvas.current?.getContext('2d');
-      if (ctx) renderBoard(ctx, aim.current, held.current, hitsRef.current, now < cooldown.current);
+      if (ctx) renderBoard(ctx, aim.current, held.current, hitsRef.current, now < cooldown.current, settingsRef.current);
       frame = requestAnimationFrame(draw);
     }
     frame = requestAnimationFrame(draw);
@@ -118,27 +148,44 @@ export default function Home() {
     <header><a className="brand" href="/" aria-label="AIR DARTS ホーム"><Crosshair size={30}/><span>AIR<span className="brand-light">DARTS</span><small>HAND TRACKING GAME</small></span></a><span className="edition">PA / カメラでダーツ</span><button className="icon-button" aria-label={sound ? '音をオフ' : '音をオン'} onClick={() => { unlockAudio(); soundRef.current = !sound; setSound(!sound); }}>{sound ? <Volume2/> : <VolumeX/>}</button></header>
     <div className="game-layout">
       <section className="arena" aria-label="ダーツのプレイエリア">
-        <div className="arena-top"><span className="live-dot"/>COUNT UP <span className="round-label">ROUND <b>{round.toString().padStart(2, '0')}</b> / 08</span></div>
+        <div className="arena-top"><span className="live-dot"/>COUNT UP <span className="round-label">ROUND <b>{round.toString().padStart(2, '0')}</b> / {String(settings.rounds).padStart(2, '0')}</span></div>
         <div className="board-wrap"><canvas width="720" height="720" ref={canvas} tabIndex={0} aria-label="ダーツ盤。クリックで投球。キーボードは矢印で狙ってスペースで投げます。" onPointerMove={e => { if (!enabled.current) aim.current = pointer(e); }} onPointerLeave={() => { if (!enabled.current) aim.current = null; }} onPointerDown={e => { if (enabled.current) return; unlockAudio(); aim.current = pointer(e); throwDart(aim.current); }} onKeyDown={e => {
           if (enabled.current || !['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) return;
           e.preventDefault(); const p = aim.current ?? { x: 0, y: 0 };
           if (e.key === ' ') { unlockAudio(); throwDart(p); } else aim.current = { x: Math.max(-1.2, Math.min(1.2, p.x + (e.key === 'ArrowRight' ? .035 : e.key === 'ArrowLeft' ? -.035 : 0))), y: Math.max(-1.2, Math.min(1.2, p.y + (e.key === 'ArrowDown' ? .035 : e.key === 'ArrowUp' ? -.035 : 0))) };
         }}/>
-          {finished && <div className="finish"><span>GAME FINISHED</span><h2>ナイススロー！</h2><strong>{total}<small> POINTS</small></strong><button className="primary" onClick={reset}><RotateCcw size={18}/>もう一度遊ぶ</button></div>}
+          {finished && <div className="finish"><span>{newBest ? 'NEW BEST!' : 'GAME FINISHED'}</span><h2>{newBest ? '自己ベスト更新！' : 'ナイススロー！'}</h2><strong>{total}<small> POINTS</small></strong><p className="finish-stats">平均 {average}点 / ブル {bulls}回</p><button className="primary" onClick={reset}><RotateCcw size={18}/>もう一度遊ぶ</button></div>}
         </div>
         <div className="throw-result" role="status" aria-live="polite" key={hits.length}>{result}</div>
         <div className="legend"><span><i className="green"/>外側の細い帯 ×2</span><span><i className="red"/>内側の細い帯 ×3</span><span>中心 50 / 外ブル 25</span></div>
       </section>
       <aside>
-        <section className="score-panel"><div className="eyebrow">TOTAL SCORE</div><div className="total">{total.toString().padStart(3, '0')}<span>PT</span></div><div className="darts">{[0,1,2].map(i => <div key={i} className={current[i] ? 'used' : ''}><small>DART {i + 1}</small><b>{current[i]?.score ?? '—'}</b></div>)}</div><div className="progress">{Array.from({length:8}, (_,i) => <span key={i} className={hits.length >= (i+1)*3 ? 'complete' : i === round-1 ? 'active' : ''}/>)}</div><div className="score-footer"><span>3投 × 8ラウンド</span><button onClick={reset}><RotateCcw size={14}/>やり直す</button></div></section>
+        <section className="score-panel">
+          <div className="eyebrow">TOTAL SCORE</div><div className="total">{total.toString().padStart(3, '0')}<span>PT</span></div>
+          <div className="session-stats"><span>平均 <b>{average}</b> 点</span><span>ブル <b>{bulls}</b> 回</span></div>
+          <div className="darts">{Array.from({length: settings.darts}, (_,i) => <div key={i} className={current[i] ? 'used' : ''}><small>DART {i + 1}</small><b>{current[i]?.score ?? '—'}</b></div>)}</div>
+          <div className="progress">{Array.from({length: settings.rounds}, (_,i) => <span key={i} className={hits.length >= (i+1)*settings.darts ? 'complete' : i === round-1 ? 'active' : ''}/>)}</div>
+          <div className="score-footer"><span>{hits.length} / {limit}投</span><button onClick={reset}><RotateCcw size={14}/>やり直す</button></div>
+          <p className="best-score">自己ベスト <b>{best ?? '—'}</b> 点 <small>同じ設定・この端末</small></p>
+          {storageWarning && <p className="storage-warning" role="status">記録を端末に保存できません。今回の結果は表示できます。</p>}
+        </section>
+        <section className="settings-panel"><h2>ゲーム設定</h2><div className="settings-fields">
+          <label>ラウンド数<select value={draft.rounds} onChange={e => setDraft({ ...draft, rounds: Number(e.target.value) })}>{Array.from({length:12}, (_,i) => <option value={i+1} key={i}>{i+1}ラウンド</option>)}</select></label>
+          <label>1ラウンドの投数<select value={draft.darts} onChange={e => setDraft({ ...draft, darts: Number(e.target.value) })}>{Array.from({length:6}, (_,i) => <option value={i+1} key={i}>{i+1}投</option>)}</select></label>
+        </div><p>合計 {draft.rounds * draft.darts}投{hits.length > 0 && !finished ? ' · 開始すると現在の得点がリセットされます' : ''}</p><button className="primary" onClick={applySettings}>この設定で新しく始める</button></section>
+
         <section className="camera-panel"><div className="panel-heading"><h2><Camera size={18}/>カメラ</h2><span className={cameraState === 'on' ? 'connected' : ''}>{cameraState === 'on' ? '接続中' : cameraState === 'loading' ? '準備中' : '未接続'}</span></div><div className="camera-view"><video ref={video} muted playsInline autoPlay className={cameraState === 'off' ? 'hidden' : ''}/>{cameraState === 'off' && <div className="camera-placeholder"><Crosshair size={34}/><span>ここに手を映そう</span></div>}<span className="view-corner top"/><span className="view-corner bottom"/></div><p className="camera-status" role="status">{status}</p><button className="primary" disabled={cameraState === 'loading'} onClick={cameraState === 'on' ? stopCamera : startCamera}><Camera size={18}/>{cameraState === 'on' ? 'カメラを停止' : cameraState === 'loading' ? '準備しています…' : 'カメラで遊ぶ'}</button>{cameraState === 'loading' && <button className="cancel" onClick={stopCamera}>キャンセル</button>}<p className="privacy">映像はこの端末内だけで処理されます。</p></section>
+        <section className="history-panel"><h2>ラウンド履歴</h2>{hits.length === 0 ? <p>投げると得点がここに並びます。</p> : <ol>{Array.from({length: Math.ceil(hits.length / settings.darts)}, (_,i) => {
+          const darts = hits.slice(i*settings.darts, (i+1)*settings.darts);
+          return <li key={i}><span>R{String(i+1).padStart(2,'0')}{darts.length < settings.darts ? ' 途中' : ''}</span><div>{darts.map((h,j) => <span key={j} title={h.label}>{h.score}</span>)}</div><b>{darts.reduce((sum,h) => sum+h.score,0)}<small> 点</small></b></li>;
+        })}</ol>}</section>
         <section className="howto"><h2>投げ方</h2><ol><li><span>01</span><div><b>人差し指で狙う</b><p>手を動かして照準を合わせます。</p></div></li><li><span>02</span><div><b>つまんで、離す</b><p>親指と人差し指を少しの間つまみ、離すと投げます。</p></div></li></ol><div className="mouse-note"><MousePointer2 size={17}/><span>{cameraState !== 'on' ? 'マウス・タッチでも遊べます' : 'マウスで遊ぶときはカメラを停止'}</span></div></section>
       </aside>
     </div>
     <footer><span>AIR DARTS</span><span>道具いらず。指先で、ブルを狙おう。</span></footer>
   </main>;
 }
-function renderBoard(ctx: CanvasRenderingContext2D, aim: Point | null, held: boolean, hits: Hit[], cooling: boolean) {
+function renderBoard(ctx: CanvasRenderingContext2D, aim: Point | null, held: boolean, hits: Hit[], cooling: boolean, settings: GameSettings) {
   ctx.clearRect(0, 0, 720, 720); ctx.save(); ctx.translate(360,360);
   ctx.shadowColor = '#000'; ctx.shadowBlur = 35; ctx.fillStyle = '#080e12'; ctx.beginPath(); ctx.arc(0,0,325,0,Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
   ctx.strokeStyle = '#314047'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0,0,324,0,Math.PI*2); ctx.stroke();
@@ -149,8 +196,8 @@ function renderBoard(ctx: CanvasRenderingContext2D, aim: Point | null, held: boo
     const angle = -Math.PI/2 + i*Math.PI/10; ctx.fillStyle = '#e4e9e7'; ctx.font = '500 24px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(SECTORS[i]),Math.cos(angle)*299,Math.sin(angle)*299);
   }
   for (const [r,color] of [[.0935,'#248c7d'],[.0374,'#cf514c']] as const) { ctx.beginPath(); ctx.arc(0,0,270*r,0,Math.PI*2); ctx.fillStyle=color; ctx.fill(); ctx.stroke(); }
-  hits.slice(hits.length ? Math.floor((hits.length-1)/3)*3 : 0).forEach((h,i) => { const x=h.x*270,y=h.y*270; ctx.strokeStyle='#f2bd67';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+16,y-26);ctx.stroke();ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.fillStyle='#f2bd67';ctx.font='bold 14px Arial';ctx.fillText(String(i+1),x+24,y-31); });
-  if (aim && hits.length<24) drawAimDart(ctx, aim.x*270, aim.y*270, held ? '#ffcc78' : cooling ? '#8a999e' : '#8aebd6');
+  hits.slice(hits.length ? Math.floor((hits.length-1)/settings.darts)*settings.darts : 0).forEach((h,i) => { const x=h.x*270,y=h.y*270; ctx.strokeStyle='#f2bd67';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+16,y-26);ctx.stroke();ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.fillStyle='#f2bd67';ctx.font='bold 14px Arial';ctx.fillText(String(i+1),x+24,y-31); });
+  if (aim && !gameProgress(hits.length, settings).finished) drawAimDart(ctx, aim.x*270, aim.y*270, held ? '#ffcc78' : cooling ? '#8a999e' : '#8aebd6');
   ctx.restore();
 }
 
