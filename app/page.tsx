@@ -150,6 +150,28 @@ function renderBoard(ctx: CanvasRenderingContext2D, aim: Point | null, held: boo
   }
   for (const [r,color] of [[.0935,'#248c7d'],[.0374,'#cf514c']] as const) { ctx.beginPath(); ctx.arc(0,0,270*r,0,Math.PI*2); ctx.fillStyle=color; ctx.fill(); ctx.stroke(); }
   hits.slice(hits.length ? Math.floor((hits.length-1)/3)*3 : 0).forEach((h,i) => { const x=h.x*270,y=h.y*270; ctx.strokeStyle='#f2bd67';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+16,y-26);ctx.stroke();ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.fillStyle='#f2bd67';ctx.font='bold 14px Arial';ctx.fillText(String(i+1),x+24,y-31); });
-  if (aim && hits.length<24) { const x=aim.x*270,y=aim.y*270; ctx.strokeStyle=held?'#ffcc78':cooling?'#8a999e':'#8aebd6';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,held?17:11,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(x-24,y);ctx.lineTo(x-7,y);ctx.moveTo(x+7,y);ctx.lineTo(x+24,y);ctx.moveTo(x,y-24);ctx.lineTo(x,y-7);ctx.moveTo(x,y+7);ctx.lineTo(x,y+24);ctx.stroke(); }
+  if (aim && hits.length<24) drawAimDart(ctx, aim.x*270, aim.y*270, held ? '#ffcc78' : cooling ? '#8a999e' : '#8aebd6');
+  ctx.restore();
+}
+
+/** The needle tip stays exactly on the scoring coordinate. */
+function drawAimDart(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  // Point down-left, with the flight above/right of the intended hit.
+  ctx.rotate(Math.PI / 5);
+  ctx.shadowColor = '#000b'; ctx.shadowBlur = 5; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = '#eef6fa';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-2, -18); ctx.lineTo(2, -18); ctx.closePath(); ctx.fill();
+  const metal = ctx.createLinearGradient(-4, 0, 4, 0);
+  metal.addColorStop(0, '#6a8592'); metal.addColorStop(.45, '#f0f7fb'); metal.addColorStop(1, '#829ca8');
+  ctx.fillStyle = metal; ctx.beginPath(); ctx.roundRect(-4, -39, 8, 23, 3); ctx.fill();
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = '#516975'; ctx.lineWidth = 1;
+  for (let groove = -20; groove >= -35; groove -= 4) { ctx.beginPath(); ctx.moveTo(-3, groove); ctx.lineTo(3, groove); ctx.stroke(); }
+  ctx.fillStyle = '#d1dfe6'; ctx.fillRect(-1.5, -58, 3, 20);
+  ctx.fillStyle = color; ctx.strokeStyle = '#e6fff5'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, -45); ctx.lineTo(-13, -55); ctx.lineTo(-10, -72); ctx.lineTo(0, -64); ctx.lineTo(10, -72); ctx.lineTo(13, -55); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#183c47'; ctx.beginPath(); ctx.moveTo(0, -45); ctx.lineTo(0, -64); ctx.stroke();
   ctx.restore();
 }
